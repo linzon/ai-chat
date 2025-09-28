@@ -12,6 +12,7 @@ interface ChatAreaProps {
 
 export default function ChatArea({ messages, onSendMessage, theme, isLoading }: ChatAreaProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef<number>(0);
   const prevIsLoadingRef = useRef<boolean>(false);
   const [streamingMessageIds, setStreamingMessageIds] = useState<Set<number>>(new Set());
@@ -37,13 +38,7 @@ export default function ChatArea({ messages, onSendMessage, theme, isLoading }: 
       // 从加载状态变为非加载状态时
       (prevIsLoadingRef.current && !isLoading) ||
       // 消息内容更新时（流式输出）
-      (messages.length > 0 && 
-       messages[messages.length - 1].content !== 
-       (prevMessageCountRef.current > 0 ? 
-         (messages.length > prevMessageCountRef.current ? 
-           messages[messages.length - 1].content : 
-           (messages.length > 0 ? messages[messages.length - 1].content : '')) : 
-         ''));
+      isLoading;
 
     if (shouldScrollToBottom) {
       // 延迟滚动以确保DOM已更新
@@ -81,10 +76,23 @@ export default function ChatArea({ messages, onSendMessage, theme, isLoading }: 
     prevMessageCountRef.current = messages.length;
   }, [messages, isLoading]);
 
+  // 在每次渲染后检查是否需要滚动到底部
+  useEffect(() => {
+    // 延迟执行滚动以确保DOM已更新
+    const timer = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+    
+    return () => clearTimeout(timer);
+  });
+
   return (
     <div className={`flex-1 flex flex-col ${chatAreaClasses}`}>
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-4 space-y-4"
+      >
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center text-gray-500">
