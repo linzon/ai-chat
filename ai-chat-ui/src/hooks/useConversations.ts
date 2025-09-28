@@ -84,7 +84,6 @@ export function useConversations() {
   // Send message with proper user message display and streaming AI response
   const sendMessage = async (
     conversationId: number, 
-    model: string, 
     content: string, 
     messageType: string = 'text',
     file?: File
@@ -123,39 +122,154 @@ export function useConversations() {
         })
       );
 
-      // Then send the message to the API and get AI response
-      const response = await apiClient.chat(fileUrl, conversationId, model, content, messageType);
-      
-      // Update with the real AI message (replace temporary IDs if needed)
+      // Create a temporary AI message for streaming
+      const tempAiMessageId = Date.now() + 1;
+      const tempAiMessage: Message = {
+        id: tempAiMessageId,
+        conversation_id: conversationId,
+        content: '',
+        role: 'assistant',
+        message_type: 'text',
+        created_at: new Date().toISOString()
+      };
+
+      // Add temporary AI message
       setConversations(prev => 
         prev.map(conv => {
           if (conv.id === conversationId) {
-            // Find and replace the AI message (in case we want to stream it in the future)
-            const updatedMessages = [
-              ...conv.messages,
-              {
-                id: response.ai_message.id,
-                conversation_id: conversationId,
-                content: response.ai_message.content,
-                role: 'assistant' as const,
-                message_type: response.ai_message.message_type,
-                created_at: new Date().toISOString()
-              }
-            ];
-            
             return {
               ...conv,
-              messages: updatedMessages,
+              messages: [...conv.messages, tempAiMessage],
               updated_at: new Date().toISOString()
             };
           }
           return conv;
         })
       );
+
+      // Use streaming to get AI response
+      let accumulatedContent = '';
+      let thinkingProcess = '';
       
-      return response;
+      await apiClient.chatStream(
+        fileUrl,
+        conversationId,
+        'qwen-2.5', // Default model
+        content,
+        messageType,
+        (event: any) => {
+          if (event.type === 'thinking_process') {
+            // 累积思考过程
+            thinkingProcess += event.data.message + '\n';
+            
+            // 更新消息内容，包含思考过程和模型回复的格式
+            const formattedContent = `[思考过程]\n${thinkingProcess}[模型回复]\n${accumulatedContent}`;
+            
+            // 更新AI消息内容
+            setConversations(prev => 
+              prev.map(conv => {
+                if (conv.id === conversationId) {
+                  const updatedMessages = conv.messages.map(msg => {
+                    if (msg.id === tempAiMessageId) {
+                      return {
+                        ...msg,
+                        content: formattedContent
+                      };
+                    }
+                    return msg;
+                  });
+                  
+                  return {
+                    ...conv,
+                    messages: updatedMessages,
+                    updated_at: new Date().toISOString()
+                  };
+                }
+                return conv;
+              })
+            );
+          } else if (event.type === 'text_message_delta') {
+            accumulatedContent += event.data.content;
+            
+            // 更新消息内容，包含思考过程和模型回复的格式
+            const formattedContent = thinkingProcess 
+              ? `[思考过程]\n${thinkingProcess}[模型回复]\n${accumulatedContent}`
+              : accumulatedContent;
+            
+            // 更新AI消息内容
+            setConversations(prev => 
+              prev.map(conv => {
+                if (conv.id === conversationId) {
+                  const updatedMessages = conv.messages.map(msg => {
+                    if (msg.id === tempAiMessageId) {
+                      return {
+                        ...msg,
+                        content: formattedContent
+                      };
+                    }
+                    return msg;
+                  });
+                  
+                  return {
+                    ...conv,
+                    messages: updatedMessages,
+                    updated_at: new Date().toISOString()
+                  };
+                }
+                return conv;
+              })
+            );
+          } else if (event.type === 'text_message_end') {
+            // 构建最终的格式化内容
+            const finalContent = thinkingProcess 
+              ? `[思考过程]\n${thinkingProcess}[模型回复]\n${accumulatedContent}`
+              : accumulatedContent;
+            
+            // Replace temporary message with final message
+            setConversations(prev => 
+              prev.map(conv => {
+                if (conv.id === conversationId) {
+                  const updatedMessages = conv.messages.map(msg => {
+                    if (msg.id === tempAiMessageId) {
+                      return {
+                        ...msg,
+                        id: event.data.message_id, // Use real ID from backend
+                        content: finalContent
+                      };
+                    }
+                    return msg;
+                  });
+                  
+                  return {
+                    ...conv,
+                    messages: updatedMessages,
+                    updated_at: new Date().toISOString()
+                  };
+                }
+                return conv;
+              })
+            );
+          }
+        }
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
+      // Remove the temporary messages if there was an error
+      setConversations(prev => 
+        prev.map(conv => {
+          if (conv.id === conversationId) {
+            const filteredMessages = conv.messages.filter(
+              msg => msg.id !== Date.now() && msg.id !== (Date.now() + 1)
+            );
+            return {
+              ...conv,
+              messages: filteredMessages,
+              updated_at: new Date().toISOString()
+            };
+          }
+          return conv;
+        })
+      );
       throw err;
     }
   };

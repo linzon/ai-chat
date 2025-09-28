@@ -53,19 +53,15 @@ interface ChatRequest {
   message_type: 'text' | 'image' | 'document' | 'audio';
 }
 
-interface ChatResponse {
-  user_message: {
-    id: number;
-    content: string;
-    role: string;
-    message_type: string;
-  };
-  ai_message: {
-    id: number;
-    content: string;
-    role: string;
-    message_type: string;
-  };
+export interface ChatResponse {
+  user_message: Message;
+  ai_message: Message;
+}
+
+// AG-UI Event Types
+export interface AGUIEvent {
+  type: string;
+  data: any;
 }
 
 interface UploadResponse {
@@ -96,10 +92,18 @@ class ApiClient {
   }
 
   private async handleResponse(response: Response): Promise<any> {
+    const contentType = response.headers.get('content-type');
+    
+    // 如果是SSE流，返回原始响应对象
+    if (contentType && contentType.includes('text/event-stream')) {
+      return response;
+    }
+    
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`API Error: ${response.status} - ${errorText}`);
     }
+    
     return await response.json();
   }
 
@@ -118,7 +122,9 @@ class ApiClient {
 
     const data = await this.handleResponse(response);
     this.token = data.access_token;
-    localStorage.setItem('token', this.token);
+    if (this.token) {
+      localStorage.setItem('token', this.token);
+    }
     localStorage.setItem('user', JSON.stringify(data.user));
     return data;
   }
@@ -219,7 +225,77 @@ class ApiClient {
       }),
     });
 
+    // 检查响应是否为SSE流
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('text/event-stream')) {
+      // 如果是SSE流，抛出特定错误
+      throw new Error('SSE stream response received - use chatStream instead');
+    }
+
     return await this.handleResponse(response);
+  }
+
+  /**
+   * Chat with SSE streaming using AG-UI protocol
+   * @param fileUrl 
+   * @param conversationId 
+   * @param model 
+   * @param message 
+   * @param messageType 
+   * @param onEvent 
+   */
+  async chatStream(
+    fileUrl: string,
+    conversationId: number,
+    model: string,
+    message: string,
+    messageType: string = 'text',
+    onEvent: (event: AGUIEvent) => void
+  ): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/conversations/chat`, {
+      method: 'POST',
+      headers: {
+        ...this.getHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_url: fileUrl,
+        conversation_id: conversationId,
+        model,
+        message,
+        message_type: messageType,
+      }),
+    });
+
+    if (!response.body) {
+      throw new Error('ReadableStream not supported');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const eventData = JSON.parse(line.slice(6));
+              onEvent(eventData);
+            } catch (e) {
+              console.warn('Error parsing SSE event:', line, e);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   // File upload

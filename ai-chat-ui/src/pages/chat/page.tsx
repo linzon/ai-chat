@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useConversations } from '../../hooks/useConversations';
 import { useTheme } from '../../hooks/useTheme';
-import { apiClient } from '../../api/client';
+import { apiClient, type Message, type AGUIEvent } from '../../api/client';
 import LoginPage from '../auth/LoginPage';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
@@ -92,21 +92,36 @@ export default function ChatPage() {
   };
 
   const handleSendMessage = async (content: string, type: 'text' | 'image' | 'document' | 'audio' = 'text', file?: File) => {
-    if (!activeConversationId || !selectedModel) return;
+    if (!activeConversationId || !user) return;
 
     try {
       setIsLoading(true);
       setError(null);
       
-      // For file messages, we would need to handle file upload
-      // For now, we'll just send as text with a placeholder for file
-      await sendMessage(activeConversationId, selectedModel, content, type, file);
+      // 发送消息
+      await sendMessage(activeConversationId, content, type, file);
     } catch (err) {
       setError(err instanceof Error ? err.message : '发送消息失败');
+      console.error('发送消息失败:', err);
     } finally {
       setIsLoading(false);
     }
   };
+
+  // 获取需要流式输出的消息ID列表
+  const getStreamingMessageIds = () => {
+    if (!activeConversation) return new Set<string>();
+    
+    // 只有最新的AI消息需要流式输出
+    const aiMessages = activeConversation.messages.filter(msg => msg.role === 'assistant');
+    if (aiMessages.length > 0) {
+      const latestAiMessage = aiMessages[aiMessages.length - 1];
+      return new Set([latestAiMessage.id]);
+    }
+    return new Set<string>();
+  };
+
+  const streamingMessageIds = getStreamingMessageIds();
 
   const handleExportChat = () => {
     if (!activeConversation) return;

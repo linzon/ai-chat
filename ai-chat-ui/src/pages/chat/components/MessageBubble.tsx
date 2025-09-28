@@ -1,14 +1,140 @@
-import { useState } from 'react';
-import { Message } from '../../../api/client';
+import { useState, useEffect, useRef } from 'react';
+import type { Message } from '../../../api/client';
 
 interface MessageBubbleProps {
   message: Message;
   theme: 'light' | 'dark';
+  onContentUpdate?: () => void;
+  isNewMessage?: boolean;
 }
 
-export default function MessageBubble({ message, theme }: MessageBubbleProps) {
+export default function MessageBubble({ message, theme, onContentUpdate, isNewMessage = false }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  // 思考过程和模型回复的状态
+  const [thinkingExpanded, setThinkingExpanded] = useState(true);
+  const [displayedThinking, setDisplayedThinking] = useState('');
+  const [displayedModel, setDisplayedModel] = useState('');
+  const [isThinkingStreaming, setIsThinkingStreaming] = useState(false);
+  const [isModelStreaming, setIsModelStreaming] = useState(false);
+  const thinkingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const modelIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const thinkingStepsRef = useRef<string[]>([]);
+  const thinkingStepIndexRef = useRef(0);
+
+  // 解析内容为思考过程和模型回复
+  const parseContent = (content: string) => {
+    // 检查是否包含思考过程和模型回复的标记
+    const hasThinkingProcess = content.includes('[思考过程]');
+    const hasModelResponse = content.includes('[模型回复]');
+    
+    if (hasThinkingProcess && hasModelResponse) {
+      // 使用更简单的字符串处理方式
+      const thinkingStart = content.indexOf('[思考过程]') + 6; // 6是"[思考过程]"的长度
+      const modelStart = content.indexOf('[模型回复]');
+      
+      if (thinkingStart >= 6 && modelStart > thinkingStart) {
+        const thinking = content.substring(thinkingStart, modelStart).trim();
+        const model = content.substring(modelStart + 6).trim(); // 6是"[模型回复]"的长度
+        return { thinking, model };
+      }
+    }
+    
+    // 如果没有找到标记，将所有内容作为模型回复
+    return {
+      thinking: '',
+      model: content
+    };
+  };
+
+  // 清理定时器
+  const clearIntervals = () => {
+    if (thinkingIntervalRef.current) {
+      clearInterval(thinkingIntervalRef.current);
+      thinkingIntervalRef.current = null;
+    }
+    if (modelIntervalRef.current) {
+      clearInterval(modelIntervalRef.current);
+      modelIntervalRef.current = null;
+    }
+  };
+
+  // 思考过程流式显示
+  const typeThinking = (thinking: string, model: string) => {
+    clearIntervals();
+    thinkingStepsRef.current = thinking.split('\n').filter(step => step.trim() !== '');
+    thinkingStepIndexRef.current = 0;
+    setDisplayedThinking('');
+    setIsThinkingStreaming(true);
+    
+    thinkingIntervalRef.current = setInterval(() => {
+      if (thinkingStepIndexRef.current < thinkingStepsRef.current.length) {
+        const newThinking = thinkingStepsRef.current.slice(0, thinkingStepIndexRef.current + 1).join('\n');
+        setDisplayedThinking(newThinking);
+        thinkingStepIndexRef.current++;
+        if (onContentUpdate) {
+          onContentUpdate();
+        }
+      } else {
+        if (thinkingIntervalRef.current) {
+          clearInterval(thinkingIntervalRef.current);
+          thinkingIntervalRef.current = null;
+          setIsThinkingStreaming(false);
+          // 开始模型流式
+          typeModel(model);
+        }
+      }
+    }, 300);
+  };
+
+  // 模型回复流式显示
+  const typeModel = (content: string) => {
+    clearIntervals();
+    let index = 0;
+    setDisplayedModel('');
+    setIsModelStreaming(true);
+    
+    modelIntervalRef.current = setInterval(() => {
+      if (index <= content.length) {
+        const newContent = content.substring(0, index);
+        setDisplayedModel(newContent);
+        index++;
+        if (onContentUpdate) {
+          onContentUpdate();
+        }
+      } else {
+        if (modelIntervalRef.current) {
+          clearInterval(modelIntervalRef.current);
+          modelIntervalRef.current = null;
+          setIsModelStreaming(false);
+        }
+      }
+    }, 20);
+  };
+
+  useEffect(() => {
+    const { thinking, model } = parseContent(message.content);
+    
+    // 对于新消息且是AI回复，启动流式
+    if (isNewMessage && message.role === 'assistant') {
+      if (thinking) {
+        typeThinking(thinking, model);
+      } else {
+        typeModel(model);
+      }
+    } else {
+      // 历史消息直接显示完整内容
+      setDisplayedThinking(thinking);
+      setDisplayedModel(model);
+      setIsThinkingStreaming(false);
+      setIsModelStreaming(false);
+    }
+    
+    // 清理定时器
+    return () => {
+      clearIntervals();
+    };
+  }, [message.content, message.role, isNewMessage]);
 
   const handleCopy = async () => {
     try {
@@ -43,8 +169,7 @@ export default function MessageBubble({ message, theme }: MessageBubbleProps) {
     }
   };
 
-  const formatContent = (content: string) => {
-    // 简单的markdown渲染
+  const formatModelResponse = (content: string) => {
     return content
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
@@ -56,6 +181,11 @@ export default function MessageBubble({ message, theme }: MessageBubbleProps) {
   };
 
   const isUser = message.role === 'user';
+
+  // 新增：仅对AI消息解析内容
+  const { thinking, model } = message.role === 'assistant' 
+    ? parseContent(message.content)
+    : { thinking: '', model: message.content };
 
   return (
     <div className={`flex items-start space-x-3 ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
@@ -111,8 +241,73 @@ export default function MessageBubble({ message, theme }: MessageBubbleProps) {
             <div 
               className="text-sm leading-relaxed break-words"
               style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}
-              dangerouslySetInnerHTML={{ __html: formatContent(message.content) }}
-            />
+            >
+              {message.role === 'assistant' ? (
+                <>
+                  {/* 思考过程区域 */}
+                  {thinking && (
+                    <div className="mb-3">
+                      <div 
+                        className="flex items-center cursor-pointer p-2 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded transition-colors"
+                        onClick={() => setThinkingExpanded(!thinkingExpanded)}
+                      >
+                        <i className={`ri-arrow-${thinkingExpanded ? 'down' : 'right'}-s-line mr-2 text-blue-500 dark:text-blue-400`}></i>
+                        <h3 className="text-sm font-semibold text-blue-500 dark:text-blue-400">
+                          思考过程
+                        </h3>
+                        {isThinkingStreaming && (
+                          <div className="ml-2 flex space-x-1">
+                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                          </div>
+                        )}
+                      </div>
+                      {thinkingExpanded && (
+                        <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 rounded border-l-4 border-blue-500 dark:border-blue-400">
+                          <div 
+                            className="text-gray-800 dark:text-gray-200"
+                            dangerouslySetInnerHTML={{ 
+                              __html: formatModelResponse(displayedThinking || thinking) 
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* 模型回复区域 */}
+                  <div className="mt-2 p-3 bg-green-50 dark:bg-green-900/20 rounded border-l-4 border-green-500 dark:border-green-400">
+                    <div className="flex items-center mb-2">
+                      <h3 className="text-sm font-semibold text-green-600 dark:text-green-400">
+                        模型回复
+                      </h3>
+                      {isModelStreaming && (
+                        <div className="ml-2 flex space-x-1">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                        </div>
+                      )}
+                    </div>
+                    <div 
+                      className="text-gray-800 dark:text-gray-200"
+                      dangerouslySetInnerHTML={{ 
+                        __html: formatModelResponse(displayedModel || model) 
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                // 保持用户消息的原始显示样式
+                <div 
+                  className="text-gray-800 dark:text-gray-200"
+                  dangerouslySetInnerHTML={{ 
+                    __html: formatModelResponse(message.content)
+                  }}
+                />
+              )}
+            </div>
           )}
           
           <div className="flex items-center justify-between mt-3">
