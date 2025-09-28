@@ -1,9 +1,23 @@
 from sqlalchemy.orm import Session
 import sys
 import os
+import uuid
+import json
+import time
+from services.ai_service import AIService
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.conversation import Conversation, Message
+from schemas.conversation import (
+    ChatRequest
+)
+from models.user import User
+
+ai_service = AIService()
+
+def get_llm_models():
+    return ai_service.get_available_models()
 
 def get_conversations(db: Session, user_id: int):
     return db.query(Conversation).filter(Conversation.user_id == user_id).all()
@@ -50,3 +64,83 @@ def add_message(db: Session, conversation_id: int, content: str, role: str, mess
 
 def get_messages(db: Session, conversation_id: int):
     return db.query(Message).filter(Message.conversation_id == conversation_id).order_by(Message.created_at).all()
+
+
+def generate_agui_events(chat_request: ChatRequest, db: Session, current_user: User):
+    """
+    增加上下文记忆功能，框架采用mem0,每次请求时，获取当前会话的历史消息，作为上下文传递给模型。
+    """
+    
+
+    """
+    Generate AG-UI protocol events for SSE streaming
+    """
+    # Check if conversation belongs to user
+    conversation = get_conversation(db, chat_request.conversation_id)
+    if not conversation or conversation.user_id != current_user.id:
+        yield f"data: {json.dumps({'type': 'error', 'data': 'Conversation not found'})}\n\n"
+        return
+    
+    # Add user message to database
+    user_message = add_message(
+        db, 
+        chat_request.conversation_id, 
+        chat_request.message, 
+        "user",
+        chat_request.message_type,
+        chat_request.file_url
+    )
+    
+    # Send user message event
+    yield f"data: {json.dumps({'type': 'user_message', 'data': {'id': user_message.id, 'content': user_message.content, 'role': user_message.role, 'message_type': user_message.message_type}})}\n\n"
+    
+    # Send run start event
+    run_id = str(uuid.uuid4())
+    yield f"data: {json.dumps({'type': 'run_start', 'data': {'run_id': run_id}})}\n\n"
+    
+    # Send thinking process start event
+    yield f"data: {json.dumps({'type': 'thinking_start', 'data': {'message': 'AI is thinking...'}})}\n\n"
+    
+    # Send text message start event
+    message_id = str(uuid.uuid4())
+    yield f"data: {json.dumps({'type': 'text_message_start', 'data': {'message_id': message_id, 'role': 'assistant'}})}\n\n"
+
+    # Collect thinking process
+    thinking_process = ""
+    # Get AI response with streaming
+    ai_response = ""
+    for chunk in ai_service.chat_completion(
+        chat_request.model, 
+        chat_request.message, 
+        str(current_user.id)
+    ):
+        if chunk.startswith("<think>") and chunk.endswith("</think>"):
+            chunk = chunk[len("<think>"):-len("</think>")]
+            thinking_process += chunk
+            # Send thinking process delta event
+            yield f"data: {json.dumps({'type': 'thinking_process', 'data': {'message': chunk}})}\n\n"
+            continue
+        if chunk.startswith("<content>") and chunk.endswith("</content>"):
+            chunk = chunk[len("<content>"):-len("</content>")]
+            ai_response += chunk
+            # Send text message delta event
+            yield f"data: {json.dumps({'type': 'text_message_delta', 'data': {'content': chunk}})}\n\n"
+    
+    # Save AI response to database with clear separation between thinking process and model response
+    formatted_response = f"[思考过程]\n{thinking_process}\n[模型回复]\n{ai_response}"
+    ai_message = add_message(
+        db, 
+        chat_request.conversation_id, 
+        formatted_response, 
+        "assistant",
+        "text"
+    )
+
+    # Send thinking process end event
+    yield f"data: {json.dumps({'type': 'thinking_end', 'data': {'message': 'Thinking completed'}})}\n\n"
+    
+    # Send text message end event
+    yield f"data: {json.dumps({'type': 'text_message_end', 'data': {'message_id': message_id}})}\n\n"
+    
+    # Send run end event
+    yield f"data: {json.dumps({'type': 'run_end', 'data': {'run_id': run_id, 'message_id': ai_message.id}})}\n\n"

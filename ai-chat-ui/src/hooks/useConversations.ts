@@ -83,6 +83,7 @@ export function useConversations() {
 
   // Send message with proper user message display and streaming AI response
   const sendMessage = async (
+    selectedModel: string,
     conversationId: number, 
     content: string, 
     messageType: string = 'text',
@@ -154,7 +155,7 @@ export function useConversations() {
       await apiClient.chatStream(
         fileUrl,
         conversationId,
-        'qwen-2.5', // Default model
+        selectedModel, // Default model
         content,
         messageType,
         (event: any) => {

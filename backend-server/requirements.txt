@@ -1,9 +1,7 @@
 gradio==4.38.1
 langgraph==0.0.15
 sqlalchemy==2.0.30
-# mem0ai==0.1.6  # 暂时注释掉，因为可能安装有问题
-# qwen==2.5.0  # 这些是虚拟的模型引用
-# baichuan==1.0
+mem0ai==0.1.6
 fastapi==0.111.0
 uvicorn==0.30.1
 pydantic==2.7.1

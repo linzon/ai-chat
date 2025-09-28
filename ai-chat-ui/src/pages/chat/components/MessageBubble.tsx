@@ -177,7 +177,7 @@ export default function MessageBubble({ message, theme, onContentUpdate, isNewMe
       .replace(/```([\s\S]*?)```/g, '<pre class="bg-gray-100 p-3 rounded mt-2 overflow-x-auto"><code>$1</code></pre>')
       .replace(/^## (.*$)/gim, '<h2 class="text-lg font-semibold mt-4 mb-2">$1</h2>')
       .replace(/^# (.*$)/gim, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>')
-      .replace(/\n/g, '<br />');
+      .replace(/\n/g, '');
   };
 
   const isUser = message.role === 'user';

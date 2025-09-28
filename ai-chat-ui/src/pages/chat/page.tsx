@@ -99,7 +99,7 @@ export default function ChatPage() {
       setError(null);
       
       // 发送消息
-      await sendMessage(activeConversationId, content, type, file);
+      await sendMessage(selectedModel, activeConversationId, content, type, file);
     } catch (err) {
       setError(err instanceof Error ? err.message : '发送消息失败');
       console.error('发送消息失败:', err);
