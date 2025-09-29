@@ -5,6 +5,7 @@ import uuid
 import json
 import time
 from services.ai_service import AIService
+from utils.context_memory_tmp import ConversationCache
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,8 +14,11 @@ from schemas.conversation import (
     ChatRequest
 )
 from models.user import User
+# 导入文件工具函数
+from utils.file_utils import extract_filename_from_url
 
 ai_service = AIService()
+cache = ConversationCache(max_size=1000, ttl=24*3600, max_context_length=10000)
 
 def get_llm_models():
     return ai_service.get_available_models()
@@ -50,6 +54,11 @@ def delete_conversation(db: Session, conversation_id: int):
     return False
 
 def add_message(db: Session, conversation_id: int, content: str, role: str, message_type: str = "text", file_url: str = None):
+    # 如果有file_url，提取其中的文件名
+    filename = None
+    if file_url:
+        filename = extract_filename_from_url(file_url)
+    
     db_message = Message(
         conversation_id=conversation_id, 
         content=content, 
@@ -60,6 +69,12 @@ def add_message(db: Session, conversation_id: int, content: str, role: str, mess
     db.add(db_message)
     db.commit()
     db.refresh(db_message)
+    
+    # 如果提取到文件名，可以在这里进行额外处理
+    if filename:
+        # 可以添加额外的文件处理逻辑
+        pass
+        
     return db_message
 
 def get_messages(db: Session, conversation_id: int):
@@ -70,8 +85,9 @@ def generate_agui_events(chat_request: ChatRequest, db: Session, current_user: U
     """
     增加上下文记忆功能，框架采用mem0,每次请求时，获取当前会话的历史消息，作为上下文传递给模型。
     """
-    
-
+    cache.add_message(str(current_user.id), str(chat_request.conversation_id), "user", chat_request.message)
+    context = cache.get_context(str(current_user.id), str(chat_request.conversation_id))
+    context = f'当前提问：{context}|历史提问记录：{chat_request.message}'
     """
     Generate AG-UI protocol events for SSE streaming
     """
@@ -111,8 +127,10 @@ def generate_agui_events(chat_request: ChatRequest, db: Session, current_user: U
     ai_response = ""
     for chunk in ai_service.chat_completion(
         chat_request.model, 
-        chat_request.message, 
-        str(current_user.id)
+        context, 
+        str(current_user.id),
+        chat_request.file_url,
+        chat_request.message_type
     ):
         if chunk.startswith("<think>") and chunk.endswith("</think>"):
             chunk = chunk[len("<think>"):-len("</think>")]
