@@ -11,6 +11,10 @@ from utils.file_utils import extract_filename_from_url, analyze_document
 from utils.ai_message_utils import build_message_by_type
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 加载环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 class AIService:
     def __init__(self):
         # Initialize available models
@@ -29,9 +33,9 @@ class AIService:
         # 初始化Ark客户端，从环境变量中读取您的API Key
         client = OpenAI(
             # 此为默认路径，您可根据业务所在地域进行配置
-            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            base_url=os.getenv("ARK_BASE_URL"),
             # 从环境变量中获取您的 API Key。此为默认方式，您可根据需要进行修改
-            api_key=os.environ.get("ARK_API_KEY", "f1ff0594-8663-44a2-85d7-182bcc51f22c"),
+            api_key=os.environ.get("ARK_API_KEY"),
         )
         
         # 使用新的消息构建工具构建消息
@@ -59,8 +63,8 @@ class AIService:
     
         client = OpenAI(
             # 若没有配置环境变量，请用百炼API Key将下行替换为：api_key="sk-xxx",
-            api_key=os.getenv("DASHSCOPE_API_KEY", "sk-5ceee3c3e7ee422c812938b314925ded"),
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            base_url=os.getenv("DASHSCOPE_BASE_URL"),
         )
         # 使用新的消息构建工具构建消息（对于文本类型）
         messages = build_message_by_type(message_type, prompt, file_url)
@@ -70,11 +74,12 @@ class AIService:
             messages=messages,
             stream=True
         )
+
         yield "<think>" + "未开启模型思考！" + "</think>"
         for chunk in completion:
             delta = chunk.choices[0].delta
-            yield "<content>" + delta.content + "</content>"
-    
+            if delta.content:
+                yield "<content>" + delta.content + "</content>"
     def get_available_models(self):
         return list(self.models.keys())
     
